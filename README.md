@@ -5,8 +5,8 @@ A feature-rich media-to-ASCII converter written in C
 </p>
 
 <div align="center">
+<img src="./assets/ghost-in-the-shell-block.gif" width="50%" />
 <img src="https://github.com/user-attachments/assets/6896ca2f-2cfa-4543-9994-d8a91c9672ea" width="50%" />
-<img src="./assets/doom_color.png" width="45%" />
 </div>
 
 ---
@@ -99,8 +99,9 @@ pixcii --help
 | `-i, --input <path¦url>`         | Path to input media file or URL (required)                          |
 | `-o, --output <path>`        | Path to save output ASCII art (optional)                     |
 | `-c, --color`                | Enable colored ASCII output using ANSI escape codes          |
+| `--block <shape>`            | Select `▀`, `▄`, or `█` and enable block rendering           |
 | `-g, --original`             | Display media at original resolution                         |
-| `-s, --scale <float>`        | Scale media (default: 1.0) (ignored unless --original is used) |
+| `-s, --scale <float>`        | Size multiplier: 0.5 halves, 2 doubles (default: 1.0; requires --original) |
 | `-a, --aspect-ratio <float>` | Adjust character aspect ratio (default: 2.0)                 |
 | `-b, --brightness <float>`   | Adjust brightness multiplier (default: 1.0)                  |
 | `-n, --invert`               | Invert brightness levels                                      |
@@ -130,6 +131,17 @@ pixcii -i video.mp4 -c
 # GIF with edge detection
 pixcii -i animation.gif -e
 ```
+
+#### Block Color Mode
+
+```bash
+pixcii -i video.mp4 --block '▀'
+pixcii -i video.mp4 --block '▄'
+pixcii -i image.jpg --block '█'
+```
+
+Requires a UTF-8, truecolor terminal. Works with images and videos. Preserves source
+RGB values and ignores `--chars`, `--brightness`, `--invert`, and `--edges`.
 
 #### URL Processing
 

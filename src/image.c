@@ -183,7 +183,8 @@ TerminalSize getTerminalSize(void)
 // aspect_ratio: The aspect ratio of characters (width/height).
 // Called only when auto-fitting is enabled; otherwise the caller keeps the original image.
 // Returns: The resized Image struct through resized.
-int resizeImageToTerminal(const Image *image, float aspect_ratio, Image *resized)
+int resizeImageToTerminal(const Image *image, float aspect_ratio, int pixel_rows,
+                          Image *resized)
 {
     // Get the current terminal size
     TerminalSize terminal = getTerminalSize();
@@ -203,5 +204,5 @@ int resizeImageToTerminal(const Image *image, float aspect_ratio, Image *resized
     scale = fminf(fmaxf(scale, minimum_scale), maximum_scale);
     // Use the generic resizeImage function with the calculated scale and aspect ratio.
     // resizeImage will re-calculate the new dimensions based on this scale value.
-    return resizeImage(image, scale, aspect_ratio, resized);
+    return resizeImage(image, scale, aspect_ratio / pixel_rows, resized);
 }

@@ -4,12 +4,25 @@
 #include "image.h"
 #include <stdbool.h>
 
+typedef enum {
+    RENDER_ASCII,
+    RENDER_BLOCK
+} RenderMode;
+
+typedef enum {
+    BLOCK_UPPER,
+    BLOCK_LOWER,
+    BLOCK_FULL
+} BlockShape;
+
 // Structure to hold parameters for ASCII art generation
 typedef struct {
     const char *input_path;
     const char *output_path;
     const char *ascii_chars; // Default character set: " .:-=+*#%@"
     bool color; // Enable color output using ANSI escape codes.
+    RenderMode render_mode;
+    BlockShape block_shape;
     bool invert_color; // Invert brightness mapping.
     float brightness_boost; // Multiplier for brightness.
     float scale; // Scale factor for resizing the image.

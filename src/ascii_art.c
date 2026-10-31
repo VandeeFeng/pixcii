@@ -11,6 +11,7 @@
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/time.h>
 #include <libswscale/swscale.h>
 
@@ -132,36 +133,132 @@ static char selectAsciiChar(const PixelInfo *pixel, const AsciiArtParams *params
     return params->ascii_chars[index];
 }
 
+static const char colored_row_end[] = "\033[0m\n";
+
+static char *allocateTextGrid(int width, size_t rows, size_t cell_size,
+                              size_t row_suffix, size_t *capacity)
+{
+    if (width <= 0 || rows == 0 || (size_t)width > (SIZE_MAX - row_suffix) / cell_size) {
+        fprintf(stderr, "Invalid output dimensions.\n");
+        return NULL;
+    }
+    size_t row_size = (size_t)width * cell_size + row_suffix;
+    if (rows > (SIZE_MAX - 1) / row_size) {
+        fprintf(stderr, "Text output is too large.\n");
+        return NULL;
+    }
+    *capacity = rows * row_size + 1;
+    char *text = malloc(*capacity);
+    if (!text) fprintf(stderr, "Failed to allocate text output.\n");
+    return text;
+}
+
+static int blockPixelRows(BlockShape shape)
+{
+    return shape == BLOCK_FULL ? 1 : 2;
+}
+
+static char *generateBlocks(const Image *image, BlockShape shape)
+{
+    const char *glyph;
+    switch (shape) {
+        case BLOCK_UPPER: glyph = "▀"; break;
+        case BLOCK_LOWER: glyph = "▄"; break;
+        case BLOCK_FULL: glyph = "█"; break;
+        default:
+            fprintf(stderr, "Invalid block shape.\n");
+            return NULL;
+    }
+    int pixel_rows = blockPixelRows(shape);
+    int foreground = shape == BLOCK_LOWER ? 1 : 0;
+    int background = shape == BLOCK_UPPER ? 1 : 0;
+    const size_t cell_size = sizeof("\033[38;2;255;255;255m\033[48;2;255;255;255m▀") - 1;
+    const size_t row_suffix = sizeof(colored_row_end) - 1;
+    if (image->height <= 0 || !image->data || image->channels < 1 || image->channels > 4) {
+        fprintf(stderr, "Invalid block image.\n");
+        return NULL;
+    }
+    size_t rows = (size_t)image->height / pixel_rows + (image->height % pixel_rows != 0);
+    size_t capacity;
+    char *text = allocateTextGrid(image->width, rows, cell_size, row_suffix, &capacity);
+    if (!text) return NULL;
+    char *cursor = text;
+    for (size_t row = 0; row < rows; row++) {
+        for (int x = 0; x < image->width; x++) {
+            unsigned colors[2][3] = {{0}};
+            for (int half = 0; half < pixel_rows; half++) {
+                size_t y = row * pixel_rows + half;
+                // Pad a missing lower pixel with black instead of reading past the image.
+                if (y >= (size_t)image->height) continue;
+                const uint8_t *pixel = image->data +
+                    (y * image->width + x) * image->channels;
+                for (int channel = 0; channel < 3; channel++) {
+                    colors[half][channel] = pixel[image->channels < 3 ? 0 : channel];
+                }
+            }
+            size_t remaining = capacity - (size_t)(cursor - text);
+            int length = snprintf(cursor, remaining,
+                                  "\033[38;2;%u;%u;%um\033[48;2;%u;%u;%um%s",
+                                  colors[foreground][0], colors[foreground][1], colors[foreground][2],
+                                  colors[background][0], colors[background][1], colors[background][2],
+                                  glyph);
+            if (length < 0 || (size_t)length >= remaining) {
+                free(text);
+                return NULL;
+            }
+            cursor += length;
+        }
+        memcpy(cursor, colored_row_end, row_suffix);
+        cursor += row_suffix;
+    }
+    *cursor = '\0';
+    return text;
+}
+
+static int renderPixelRows(const AsciiArtParams *params)
+{
+    return params->render_mode == RENDER_BLOCK ? blockPixelRows(params->block_shape) : 1;
+}
+
+static int resizeRenderImage(const Image *image, const AsciiArtParams *params,
+                             Image *resized)
+{
+    int pixel_rows = renderPixelRows(params);
+    if (params->auto_fit) {
+        return resizeImageToTerminal(image, params->aspect_ratio, pixel_rows, resized);
+    }
+    float width = image->width * params->scale;
+    float height = image->height * params->scale / (params->aspect_ratio / pixel_rows);
+    if (!isfinite(width) || !isfinite(height) ||
+        (double)width > INT_MAX || (double)height > INT_MAX) {
+        fprintf(stderr, "Invalid scaled image dimensions.\n");
+        return -1;
+    }
+    return resizeImageToSize(image, (int)fmaxf(width, 1.0f),
+                             (int)fmaxf(height, 1.0f), resized);
+}
+
 // Generate ASCII art as a text string
 // Iterates through each pixel of the image, calculates its info, selects a character,
 // and formats the output string, including ANSI color codes if enabled.
 char *generateAsciiText(const Image *image, const AsciiArtParams *params,
                        const float *edge_magnitudes)
 {
+    if (params->render_mode == RENDER_BLOCK) return generateBlocks(image, params->block_shape);
     // Determine if color output should be used (requires color flag and enough image channels)
     bool use_color = params->color && image->channels >= 3;
     const size_t colored_pixel_size = sizeof("\033[38;2;255;255;255m") - 1 + 1;
-    const size_t colored_row_size = sizeof("\033[0m\n") - 1;
+    const size_t colored_row_size = sizeof(colored_row_end) - 1;
     size_t pixel_size = use_color ? colored_pixel_size : 1;
     size_t row_suffix = use_color ? colored_row_size : 1;
     size_t character_count = strlen(params->ascii_chars);
-    if (!character_count || image->width <= 0 || image->height <= 0 ||
-        (size_t)image->width > (SIZE_MAX - row_suffix) / pixel_size) {
+    if (!character_count || image->height <= 0) {
         fprintf(stderr, "Invalid ASCII output dimensions or character set.\n");
         return NULL;
     }
-    size_t row_size = (size_t)image->width * pixel_size + row_suffix;
-    if ((size_t)image->height > (SIZE_MAX - 1) / row_size) {
-        fprintf(stderr, "ASCII output is too large.\n");
-        return NULL;
-    }
-    size_t capacity = row_size * image->height + 1;
-    // Allocate space for every pixel, row reset, newline and the terminator.
-    char *text = malloc(capacity);
-    if (!text) {
-        fprintf(stderr, "Failed to allocate ASCII output.\n");
-        return NULL;
-    }
+    size_t capacity;
+    char *text = allocateTextGrid(image->width, image->height, pixel_size, row_suffix, &capacity);
+    if (!text) return NULL;
     char *cursor = text;
     // Iterate through each row (height) of the image
     for (int y = 0; y < image->height; y++) {
@@ -181,7 +278,7 @@ char *generateAsciiText(const Image *image, const AsciiArtParams *params,
                 int length = snprintf(cursor, capacity - (size_t)(cursor - text),
                                       "\033[38;2;%u;%u;%um", (unsigned)pixel.color[0],
                                       (unsigned)pixel.color[1], (unsigned)pixel.color[2]);
-                if (length < 0) {
+                if (length < 0 || (size_t)length >= capacity - (size_t)(cursor - text)) {
                     free(text);
                     return NULL;
                 }
@@ -194,14 +291,26 @@ char *generateAsciiText(const Image *image, const AsciiArtParams *params,
         // --- Color Reset and Newline ---
         // Reset color at the end of each line to prevent bleeding into the next line or prompt
         if (use_color) {
-            memcpy(cursor, "\033[0m", sizeof("\033[0m") - 1);
-            cursor += sizeof("\033[0m") - 1;
+            memcpy(cursor, colored_row_end, row_suffix);
+            cursor += row_suffix;
+        } else {
+            *cursor++ = '\n';
         }
-        // Add a newline character at the end of each row to move to the next line of ASCII art
-        *cursor++ = '\n';
     }
     // Return the complete generated ASCII text string
     *cursor = '\0';
+    return text;
+}
+
+static char *generateRenderText(const Image *image, const AsciiArtParams *params)
+{
+    float *edges = NULL;
+    if (params->detect_edges && params->render_mode == RENDER_ASCII) {
+        edges = detectEdges(image);
+        if (!edges) return NULL;
+    }
+    char *text = generateAsciiText(image, params, edges);
+    free(edges);
     return text;
 }
 
@@ -211,16 +320,14 @@ int processImage(const AsciiArtParams *params)
 {
     Image image = {0};
     Image resized = {0};
-    float *edges = NULL;
     char *text = NULL;
     int result = -1;
     // Load the image from the specified input path
     if (loadImage(params->input_path, &image) != 0) goto cleanup;
     // --- Image Resizing and Aspect Ratio Adjustment ---
     // Check if auto-fit to terminal is enabled
-    if (params->auto_fit) {
-        // Resize image to fit terminal dimensions while respecting aspect ratio
-        if (resizeImageToTerminal(&image, params->aspect_ratio, &resized) != 0) goto cleanup;
+    if (params->render_mode == RENDER_BLOCK || params->auto_fit) {
+        if (resizeRenderImage(&image, params, &resized) != 0) goto cleanup;
     // Otherwise, apply scaling based on the scale parameter
     } else if (params->scale != 1.0f) {
         // Original size mode with optional scaling
@@ -313,19 +420,7 @@ int processImage(const AsciiArtParams *params)
         image = resized;
         resized = (Image){0};
     }
-    // --- Edge Detection ---
-    // Perform edge detection ONCE on the resized image if requested by parameters
-    // Use a pointer to the edge magnitudes array. It will be NULL if edges are not detected.
-    if (params->detect_edges) {
-        // Call the edge detection function and keep the calculated magnitudes
-        edges = detectEdges(&image);
-        if (!edges) goto cleanup;
-    }
-    // --- End Edge Detection ---
-
-    // Generate the ASCII text representation of the image
-    // Pass the image data, parameters, and the optional edge magnitudes pointer
-    text = generateAsciiText(&image, params, edges);
+    text = generateRenderText(&image, params);
     if (!text) goto cleanup;
     // --- Output Handling ---
     // If an output path is specified, save the ASCII text to a file
@@ -336,9 +431,7 @@ int processImage(const AsciiArtParams *params)
         result = printf("\n%s\n", text) < 0 ? -1 : 0;
     }
 cleanup:
-    // Note: Image data, edge magnitudes and generated text are explicitly freed in C.
     free(text);
-    free(edges);
     freeImage(&resized);
     freeImage(&image);
     return result;
@@ -401,26 +494,72 @@ static VideoRotation videoRotation(const AVStream *stream)
     }
 }
 
-// Convert a decoded frame and apply the display rotation previously handled by OpenCV.
-static int frameToImage(const AVFrame *frame, struct SwsContext **converter, Image *image,
+typedef struct {
+    struct SwsContext *context;
+    int width;
+    int height;
+    enum AVPixelFormat format;
+    int colorspace;
+    int source_range;
+} VideoConverter;
+
+static int configureConverter(const AVFrame *frame, VideoConverter *converter)
+{
+    // Geometry and format changes can recreate a context at the same address.
+    bool context_changed = !converter->context || converter->width != frame->width ||
+                           converter->height != frame->height || converter->format != frame->format;
+    if (context_changed) {
+        converter->context = sws_getCachedContext(converter->context, frame->width, frame->height,
+                                                  (enum AVPixelFormat)frame->format,
+                                                  frame->width, frame->height, AV_PIX_FMT_RGB24,
+                                                  SWS_BILINEAR, NULL, NULL, NULL);
+        if (!converter->context) return AVERROR(ENOMEM);
+    }
+    int colorspace = SWS_CS_DEFAULT;
+    switch (frame->colorspace) {
+        case AVCOL_SPC_BT709: colorspace = SWS_CS_ITU709; break;
+        case AVCOL_SPC_FCC: colorspace = SWS_CS_FCC; break;
+        case AVCOL_SPC_BT470BG:
+        case AVCOL_SPC_SMPTE170M: colorspace = SWS_CS_ITU601; break;
+        case AVCOL_SPC_SMPTE240M: colorspace = SWS_CS_SMPTE240M; break;
+        case AVCOL_SPC_BT2020_NCL: colorspace = SWS_CS_BT2020; break;
+        default: break;
+    }
+    int source_range = frame->color_range == AVCOL_RANGE_JPEG;
+    if (frame->color_range == AVCOL_RANGE_UNSPECIFIED) {
+        const AVPixFmtDescriptor *descriptor = av_pix_fmt_desc_get(frame->format);
+        source_range = descriptor && ((descriptor->flags & AV_PIX_FMT_FLAG_RGB) ||
+                                      !strncmp(descriptor->name, "yuvj", 4));
+    }
+    if (context_changed || converter->colorspace != colorspace ||
+        converter->source_range != source_range) {
+        const int *coefficients = sws_getCoefficients(colorspace);
+        const int full_range = 1;
+        const int fixed_point_unity = 1 << 16;
+        int result = sws_setColorspaceDetails(converter->context, coefficients, source_range,
+                                              coefficients, full_range, 0,
+                                              fixed_point_unity, fixed_point_unity);
+        if (result < 0) return result;
+        converter->width = frame->width;
+        converter->height = frame->height;
+        converter->format = frame->format;
+        converter->colorspace = colorspace;
+        converter->source_range = source_range;
+    }
+    return 0;
+}
+
+// Convert a decoded frame and apply its display rotation.
+static int frameToImage(const AVFrame *frame, VideoConverter *converter, Image *image,
                         VideoRotation rotation)
 {
+    int result = configureConverter(frame, converter);
+    if (result < 0) return result;
     uint8_t *pixels[4] = {0};
     int strides[4] = {0};
-    int result = av_image_alloc(pixels, strides, frame->width, frame->height,
-                                AV_PIX_FMT_RGB24, 32);
+    result = av_image_alloc(pixels, strides, frame->width, frame->height, AV_PIX_FMT_RGB24, 32);
     if (result < 0) return result;
-    // Copy pixel data from the decoded frame to your Image structure.
-    // FFmpeg may supply planar, packed, grayscale or other formats, so convert to RGB.
-    *converter = sws_getCachedContext(*converter, frame->width, frame->height,
-                                      (enum AVPixelFormat)frame->format,
-                                      frame->width, frame->height, AV_PIX_FMT_RGB24,
-                                      SWS_BILINEAR, NULL, NULL, NULL);
-    if (!*converter) {
-        av_freep(&pixels[0]);
-        return AVERROR(ENOMEM);
-    }
-    result = sws_scale(*converter, (const uint8_t *const *)frame->data, frame->linesize,
+    result = sws_scale(converter->context, (const uint8_t *const *)frame->data, frame->linesize,
                        0, frame->height, pixels, strides);
     if (result < 0) {
         av_freep(&pixels[0]);
@@ -473,50 +612,37 @@ static int frameToImage(const AVFrame *frame, struct SwsContext **converter, Ima
 }
 
 // Apply the existing processing pipeline and render one frame with artifact cleanup.
-static int renderVideoFrame(const AVFrame *frame, struct SwsContext **converter,
+static int renderVideoFrame(const AVFrame *frame, VideoConverter *converter,
                             const AsciiArtParams *params, TerminalSize *previous,
                             VideoRotation rotation)
 {
     Image image = {0};
     Image resized = {0};
-    float *edges = NULL;
     char *text = NULL;
     // Convert and process frame
     int result = frameToImage(frame, converter, &image, rotation);
     if (result < 0) goto cleanup;
-    // Apply existing processing pipeline
-    if (params->auto_fit) {
-        result = resizeImageToTerminal(&image, params->aspect_ratio, &resized);
-    } else {
-        result = resizeImage(&image, params->scale, params->aspect_ratio, &resized);
-    }
+    result = resizeRenderImage(&image, params, &resized);
     if (result != 0) goto cleanup;
-    // Edge detection if enabled
-    if (params->detect_edges) {
-        edges = detectEdges(&resized);
-        if (!edges) {
-            result = -1;
-            goto cleanup;
-        }
-    }
-    // Generate ASCII text
-    text = generateAsciiText(&resized, params, edges);
+    text = generateRenderText(&resized, params);
     if (!text) {
         result = -1;
         goto cleanup;
     }
+    int pixel_rows = renderPixelRows(params);
+    int rendered_height = resized.height / pixel_rows + (resized.height % pixel_rows != 0);
     // Frame rendering with cleanup
     fputs("\033[1;1H", stdout); // Go to top-left
 
     // Clean up previous frame artifacts
     if (previous->height > 0 || previous->width > 0) {
         // Clear extra lines if frame got shorter
-        for (int line = resized.height + 1; line <= previous->height; line++) {
+        for (int line = rendered_height + 1; line <= previous->height; line++) {
             printf("\033[%d;1H\033[K", line);
         }
         // Clear extra columns if frame got narrower
         if (resized.width < previous->width) {
-            int height = resized.height > previous->height ? resized.height : previous->height;
+            int height = rendered_height > previous->height ? rendered_height : previous->height;
             for (int line = 1; line <= height; line++) {
                 printf("\033[%d;%dH\033[K", line, resized.width + 1);
             }
@@ -528,10 +654,9 @@ static int renderVideoFrame(const AVFrame *frame, struct SwsContext **converter,
 
     // Update dimensions for next iteration
     previous->width = resized.width;
-    previous->height = resized.height;
+    previous->height = rendered_height;
 cleanup:
     free(text);
-    free(edges);
     freeImage(&resized);
     freeImage(&image);
     return result;
@@ -544,7 +669,7 @@ int processVideo(const char *path, const AsciiArtParams *params, int frame_delay
     AVCodecContext *decoder = NULL;
     AVPacket *packet = NULL;
     AVFrame *frame = NULL;
-    struct SwsContext *converter = NULL;
+    VideoConverter converter = {0};
     bool terminal_active = false;
     TerminalSize previous = {0};
     // Open the media and select its video stream.
@@ -627,7 +752,7 @@ cleanup:
         fprintf(stderr, "Failed to process video/GIF file: %s - %s\n", path, message);
     }
     // Release the conversion context, frame, packet, decoder and input stream.
-    sws_freeContext(converter);
+    sws_freeContext(converter.context);
     av_frame_free(&frame);
     av_packet_free(&packet);
     avcodec_free_context(&decoder);

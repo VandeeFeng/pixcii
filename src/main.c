@@ -161,8 +161,9 @@ static void displayHelp(const char *program_name)
          "Options:\n"
          "  -o, --output <path>         Path to save output ASCII art\n"
          "  -c, --color                 Enable colored ASCII output using ANSI escape codes\n"
+         "      --block <shape>        Select ▀, ▄, or █ and enable block rendering\n"
          "  -g, --original              Display media at original resolution\n"
-         "  -s, --scale <float>         Scale media (default: 1.0) (ignored unless --original is used)\n"
+         "  -s, --scale <float>         Size multiplier: 0.5 halves, 2 doubles (requires --original)\n"
          "  -a, --aspect-ratio <float>  Set character aspect ratio (default: 2.0)\n"
          "  -b, --brightness <float>    Adjust brightness multiplier (default: 1.0)\n"
          "  -n, --invert                Invert brightness mapping\n"
@@ -229,7 +230,7 @@ int main(int argc, char *argv[])
             goto cleanup;
         } else {
             // Check for known options
-            enum { INPUT, OUTPUT, CHARACTERS, BRIGHTNESS, SCALE, ASPECT, DELAY } option;
+            enum { INPUT, OUTPUT, CHARACTERS, BRIGHTNESS, SCALE, ASPECT, DELAY, BLOCK } option;
             if (!strcmp(argument, "-i") || !strcmp(argument, "--input")) option = INPUT;
             else if (!strcmp(argument, "-o") || !strcmp(argument, "--output")) option = OUTPUT;
             else if (!strcmp(argument, "-m") || !strcmp(argument, "--chars")) option = CHARACTERS;
@@ -237,6 +238,7 @@ int main(int argc, char *argv[])
             else if (!strcmp(argument, "-s") || !strcmp(argument, "--scale")) option = SCALE;
             else if (!strcmp(argument, "-a") || !strcmp(argument, "--aspect-ratio")) option = ASPECT;
             else if (!strcmp(argument, "-d") || !strcmp(argument, "--delay")) option = DELAY;
+            else if (!strcmp(argument, "--block")) option = BLOCK;
             else {
                 // Handle unknown arguments
                 fprintf(stderr, "Error: Unknown argument '%s'.\n", argument);
@@ -268,6 +270,16 @@ int main(int argc, char *argv[])
                     break;
                 case OUTPUT: params.output_path = value; break; // Assign and advance
                 case CHARACTERS: params.ascii_chars = value; break; // Assign and advance
+                case BLOCK:
+                    if (!strcmp(value, "▀")) params.block_shape = BLOCK_UPPER;
+                    else if (!strcmp(value, "▄")) params.block_shape = BLOCK_LOWER;
+                    else if (!strcmp(value, "█")) params.block_shape = BLOCK_FULL;
+                    else {
+                        fprintf(stderr, "Error: --block expects ▀, ▄, or █.\n");
+                        goto cleanup;
+                    }
+                    params.render_mode = RENDER_BLOCK;
+                    break;
                 case BRIGHTNESS:
                     // Convert next arg to float and assign
                     if (parseFloat(value, argument, &params.brightness_boost) != 0) {
@@ -324,7 +336,7 @@ int main(int argc, char *argv[])
         goto cleanup;
     }
     // Check if the character set is empty
-    if (!params.ascii_chars[0]) {
+    if (params.render_mode == RENDER_ASCII && !params.ascii_chars[0]) {
         fprintf(stderr, "Error: ASCII character set cannot be empty (--chars or -m option).\n");
         goto cleanup;
     }

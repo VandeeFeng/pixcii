@@ -51,9 +51,11 @@ int resizeImageToSize(const Image *image, int width, int height, Image *resized)
 // Resize an image to fit the current terminal dimensions.
 // image: The input Image struct.
 // aspect_ratio: The aspect ratio of characters (width/height).
+// pixel_rows: Number of source pixel rows displayed per terminal cell.
 // The caller only invokes this when auto-fitting is enabled.
 // resized: Receives a new Image struct resized to fit the terminal.
-int resizeImageToTerminal(const Image *image, float aspect_ratio, Image *resized);
+int resizeImageToTerminal(const Image *image, float aspect_ratio, int pixel_rows,
+                          Image *resized);
 
 // Convert an RGB image to grayscale.
 // image: The input Image struct (expected to have at least 3 channels).
