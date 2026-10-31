@@ -1,7 +1,7 @@
 <h1 align="center">pixcii</h1>
 
 <p align="center">
-A feature-rich media-to-ASCII converter written in C++
+A feature-rich media-to-ASCII converter written in C
 </p>
 
 <div align="center">
@@ -23,7 +23,7 @@ A feature-rich media-to-ASCII converter written in C++
 - Option to **invert brightness** for different visual effects
 - **Automatic frame rate detection** and matching for smooth video playback
 - **Efficient** media handling with optimized terminal rendering
-- **Utilizes** `stb_image` libraries for robust **media loading** and **OpenCV** for video processing
+- **Utilizes** `stb_image` libraries for robust **media loading** and **FFmpeg libraries** for video processing
 
 ## Installation
 
@@ -31,23 +31,23 @@ A feature-rich media-to-ASCII converter written in C++
 
 Ensure you have the following installed:
 
-- **C++17** or later
-- **CMake** (>= 3.10)
-- **OpenCV** (>= 4.0) for video and GIF support
+- **C17** compiler
+- **nob.h** (already included; no CMake or Make required)
+- **FFmpeg development libraries** (`libavformat`, `libavcodec`, `libavutil`, `libswscale`) for video and GIF support
 - **curl** or **wget** for URL download support
 - `stb_image.h`, `stb_image_write.h`, and `stb_image_resize2.h` (already included)
 
-#### Installing OpenCV
+#### Installing FFmpeg libraries
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install libopencv-dev curl
+sudo apt-get install libavformat-dev libavcodec-dev libavutil-dev libswscale-dev curl
 
 # macOS (with Homebrew)
-brew install opencv curl
+brew install ffmpeg curl
 
 # Windows (with vcpkg)
-vcpkg install opencv
+vcpkg install ffmpeg
 # curl is usually pre-installed on Windows 10+
 ```
 
@@ -58,17 +58,24 @@ vcpkg install opencv
 git clone https://github.com/ashish0kumar/pixcii.git
 cd pixcii
 
-# Quick build (recommended)
-chmod +x build.sh
-./build.sh
-
-# Or manual build
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+# Bootstrap nob (only once)
+gcc -o nob nob.c
+./nob
 
 # Run the program
 ./build/pixcii --help
+```
+
+Run `./nob` for subsequent builds; it rebuilds itself when `nob.c` or `nob.h` changes.
+Each invocation compiles `build/pixcii`. Set `CC=clang` to use Clang instead of GCC
+(e.g. `CC=clang ./nob`). `CC` must name a single GCC-compatible compiler executable.
+Run these commands from the repository root. On Windows, use a MinGW/MSYS2 shell
+with MinGW-compatible FFmpeg libraries.
+
+For FFmpeg outside the compiler's default search paths, specify its include and library directories:
+
+```bash
+FFMPEG_INCLUDE_DIR=/opt/ffmpeg/include FFMPEG_LIB_DIR=/opt/ffmpeg/lib ./nob
 ```
 
 #### Move to a Directory in `$PATH`
@@ -104,9 +111,9 @@ pixcii --help
 
 ### Supported Formats
 
-**Images:** JPG, PNG, BMP, TGA, GIF (static)  
-**Videos:** MP4, AVI, MOV, MKV, WEBM, M4V, WMV, FLV  
-**Animated:** GIF  
+**Images:** JPG, PNG, BMP, TGA, GIF (static)
+**Videos:** MP4, AVI, MOV, MKV, WEBM, M4V, WMV, FLV
+**Animated:** GIF
 **Input Sources:** Local files and web URLs
 
 ### Example Commands
